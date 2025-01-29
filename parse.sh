@@ -41,6 +41,7 @@ functionA() {
                 argtype='input' ;;
             *)
                 jq ".parsed.$argtype += [\"$1\"]" $in > $out
+                echo "error here"
                 ;;
         esac ; shift ; cp $out $in
     done
