@@ -1,65 +1,82 @@
 #!/bin/bash
 
 ARGS=$@
+ARGS_UNKNOWN=    # args without paramater
 OUTPUT=          # output JSON file
-CURRENT_PARAM=   # current parameter in iteration
+# CURRENT_PARAM=   # current parameter in iteration
 NO_OUTPUT=       # flag to control output
 
 # try not to mess with this structure, make other functions subfunctions of these below
 main() {
     initialize
     functionA $ARGS # Step 1: divide and sort parameters, operators, and input
-    functionB       # Step 2: process parameters
+    functionB       # Step 2: process RAW parameters (separate by , then by : then by = then by /) name/alias:type=default,name2
     functionC       # Step 3: process input based on parameters
     terminate
 }
 
 initialize() {
+    validate_args "$ARGS"
+    # create output file
     OUTPUT=$(mktemp -t parse2.XXXX.json)
     echo '{}' > $OUTPUT
-    CURRENT_PARAM='unknown'
     # count arguments and add to JSON
-    set_json 'input' null
-    set_json 'count' 0
-    set_json 'operators' '[]'
-    set_json 'parameter' '{}'
+    json_set 'input' null
+    json_set 'count' 0
+    json_set 'operators' '[]'
+    json_set 'parameter' '{}'
 }
 
 functionA() {
-    in=$OUTPUT
-    out=$(mktemp)
-    argtype='unknown'
+    param='unknown'
+    ignore=0         # tells case-esac to ignore this argument, do not json_add
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --help) NO_OUTPUT=1 ; print_help ;;
+            --help) NO_OUTPUT=1 ; [[ "$param" == 'unknown' ]] && print_help ;;
             --parameters | --parameter) 
-                argtype='raw_parameters' ;;
-            --operators)
-                argtype='operators' ;;
-            --input | --)
-                argtype='input' ;;
+                [[ $param != 'input' ]] && ignore=1 && param='raw.parameters' ;;&
+            --operators | --operator)
+                [[ $param != 'input' ]] && ignore=1 && param='operators' ;;&
+            --input | --args | --)
+                [[ $param != 'input' ]] && ignore=1 && param='input' ;;&
             *)
-                jq ".parsed.$argtype += [\"$1\"]" $in > $out
-                echo "error here"
+                if [[ $param == 'unknown' ]]
+                  then ARGS_UNKNOWN+=" $1,"
+                elif [[ $ignore == 0 ]]
+                  then json_add -a "$param" "$1"
+                fi
                 ;;
-        esac ; shift ; cp $out $in
+        esac ; shift ; ignore=0
     done
-
-    # Count the length of parsed.input and convert parsed.input into a space-separated string
-    jq '.parsed.count = (.parsed.input | length) | .parsed.input = (.parsed.input | join(" "))' $out > $OUTPUT
 }
 
+# processes parametersss
 functionB() {
   tmp=$(mktemp)
   echo "PARAMETERS ARE THE FOLLOWING:"
-  jq '.parsed.raw_parameters' $OUTPUT
-  jq 'del(.parsed.raw_parameters)' $OUTPUT > $tmp && mv $tmp $OUTPUT
-  echo -e "\nINSTRUCTIONS:\nfor each of these paramaters divided name,aliases,datatype and default value.\nThen popukate \$OUTPUT"
+  jq '.parsed.raw.parameters' $OUTPUT
+  # jq 'del(.parsed.raw_parameters)' $OUTPUT > $tmp && mv $tmp $OUTPUT
+  echo -e "\nINSTRUCTIONS:\nITERATE raw params and for each, split into aliases,datatype and default value.\nThen popukate \$OUTPUT"
 }
 
+# processes input
 functionC() {
-  :
+  # Count the length of parsed.input and convert parsed.input into a space-separated string
+  input_string=$(jq -r '.parsed.input | join(" ")' $OUTPUT)
+  input_count=$(jq '.parsed.input | length' $OUTPUT)
+  json_set 'input' "$input_string"
+  json_set 'count' $input_count
+
+  # if no input received, capture interactively
+  if [[ -z "$input_string" ]]; then
+    input=$(cat)
+    json_set 'input' '[]'
+    for arg in $input
+      do json_add -a 'input' "$arg"
+    done
+    functionC
+  fi
 }
 
 dissect_old() {
@@ -80,24 +97,24 @@ dissect() {
   echo 'dissecting...'
 }
 
+# terminates script with custom exit code
 terminate() {
     [[ -z $NO_OUTPUT ]] && jq . $OUTPUT
-    # cat $OUTPUT
+    [[ -n "$ARGS_UNKNOWN" ]] && >&2 echo -e "\e[33mNO PARAMETER PROVIDED:$ARGS_UNKNOWN\b \e[0m"
+    exit $1
 }
 
 # get_json_type() {
-#   query=".args.parsed.$1 | type"
-#   result=$(echo "$JSON" | jq -r "$query")
-#   echo "$result"
+#   query=".$1 | type"
+#   result=$(echo "$JSON" | jq -r "$query"
 # }
 
-get_json() {
-  query=".args.parsed.$1"
-  result=$(echo "$JSON" | jq -r "$query")
-  echo "$result"
+json_get() {
+  query=".$1"
+  jq -r "$query" $OUTPUT
 }
 
-set_json() {
+json_set() {
   local key="$1"
   local val=$(trim "$2")
   local tmp=$(mktemp)
@@ -126,18 +143,23 @@ set_json() {
   fi
 }
 
-append_json() {
-  echo "argtype is $1 value is $2"
-}
+json_add() {
+    tmp=$(mktemp)
+    query=
+    value=
 
-reset_cache() {
-  CURRENT_PARAM='unknown'
-}
+    case "$1" in
+      -a | --array)
+        shift
+        value="[\"$2\"]" ;;
+      *)
+        value="$2"
+    esac
 
-count_args() {
-  echo $#
+    query=".parsed.$1 += $value" # for array: "[\"$1\"]"
+    cp $OUTPUT $tmp
+    jq "$query" $tmp > $OUTPUT
 }
-
 
 add_key() {
     key= # the key to write to json file
@@ -188,8 +210,17 @@ trim() {
 }
 
 print_help() {
-  BYPASS=1
-  echo "You have successfully bypassed this command. Sadly, nothing here."
+  echo -e "HELP REQUESTED"
+  echo -e "use --parameters, --operators, and --input"
+  exit 0
+}
+
+validate_args() {
+  if [[ -z "$@" ]]; then
+    >&2 echo "No arg supplied!"
+    sleep 2
+    print_help
+  fi
 }
 
 main
