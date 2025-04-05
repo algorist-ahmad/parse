@@ -1,0 +1,36 @@
+
+\e[1mparse\e[0m - CLI argument parser with structured output
+
+\e[1mUSAGE\e[0m
+  parse \e[32m[SUBCOMMAND]\e[0m \e[33m[OPTIONS]\e[0m \e[36m[ARGUMENTS]\e[0m
+
+\e[1mSUBCOMMANDS\e[0m
+  \e[32margs\e[0m     Process key=value pairs into JSON structure. Note that everything after --args will be taken literally.
+  \e[32mhelp\e[0m     Show this help message
+  \e[32mversion\e[0m  Display version information
+
+\e[1mOPTIONS\e[0m
+  \e[33m-f, --format FORMAT\e[0m  Output format (json|yaml) [default: json]
+  \e[33m-v, --verbose\e[0m       Show detailed processing information
+
+\e[1mEXAMPLES\e[0m
+  \e[36m# Basic argument parsing\e[0m
+  parse \e[32margs\e[0m \e[36maction=create target=task\e[0m
+  
+  \e[36m# Format selection\e[0m
+  parse \e[32margs\e[0m \e[33m--format yaml\e[0m \e[36muser.name=Alice\e[0m
+  
+  \e[36m# Version check\e[0m
+  parse \e[32mversion\e[0m
+
+  \e[36m# Help documentation\e[0m
+  parse \e[32mhelp\e[0m
+
+\e[1mSYNTAX\e[0m
+  \e[36mkey=value\e[0m           Basic assignment
+  \e[36mparent.child=value\e[0m  Nested objects
+  \e[36mitems[0]=first\e[0m     Array elements
+  \e[36m"multi word values"\e[0m   Values with spaces
+
+\e[1mTIP\e[0m
+  None.

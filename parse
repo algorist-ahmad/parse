@@ -1,5 +1,169 @@
 #!/bin/bash
 
+# This version of parse needs flag --args 
+
+#FIXME: this causes an error: parse -4
+
+# ROOT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+ROOT_DIR=$(dirname "$(readlink -f "$0")")
+JSON='{}'
+ARGS="$@"
+CURRENT_OPT=
+BYPASS=0
+HELPFILE="$ROOT_DIR/help.txt"
+
+# route to the correct action/subcommand based on the first arg
+main() {
+  case "$1" in
+    '') >&2 echo -e "Usage: parse args -name values\nDo --help for details."  ;;
+    help | --help | -h) shift ; show_help  ;;
+    args | --args | -a) shift ; parse_args $@ ;;
+    ver* | --version | -v) shift ; show_version ;;
+    *) echo "parse.main: unknown command '$1'" ; exit 1 ;; 
+  esac
+}
+
+show_help() {
+  >&2 echo -e "$(cat $HELPFILE)" | less
+  echo '{}'
+}
+
+show_version() {
+  >&2 echo 'parse version ?'
+  echo '{}'
+}
+
+parse_args() {
+  edit_json input "$*"
+  edit_json count $#
+  edit_json parsed '{}'
+  # if start with --, add as key, else add as value, but if literal '--', then set -- = true
+  while [[ $# -gt 0 ]]; do
+      case "$1" in
+          --*) add_key "$1" ;;
+          -*) add_key "-$1" ;;
+          *) add_value "$CURRENT_OPT" "$1" ;;
+      esac
+      shift
+  done
+  jq . <<< "$JSON"
+}
+
+get_json_type() {
+  query=".args.parsed.$1 | type"
+  result=$(echo "$JSON" | jq -r "$query")
+  echo "$result"
+}
+
+get_json_value() {
+  query=".args.parsed.$1"
+  result=$(echo "$JSON" | jq -r "$query")
+  echo "$result"
+  
+  # # Return nothing if value is null, or "BOOL1" if it's true
+  # if [[ "$result" == "null" ]]; then
+  #   return  # This will return nothing
+  # elif [[ "$result" == "true" ]]; then
+  #   echo "BOOL1"  # Return BOOL1 if true
+  # elif [[ "$result" == "false" ]]; then
+  #   echo "BOOL0" # Return BOOL0 if false
+  # else
+  #   echo "$result"  # Otherwise, just return the value
+  # fi
+}
+
+edit_json() {
+  local key="$1"
+  local val=$(trim "$2")
+
+  # Determine the type of the value
+  if [[ "$val" =~ ^[0-9]+$ ]]; then
+    # Number
+    JSON=$(echo "$JSON" | jq ".$key = $val")
+  elif [[ "$val" =~ ^\[(.*)\]$ ]]; then
+    # Array (must be in JSON format)
+    JSON=$(echo "$JSON" | jq --argjson val "$val" ".$key = \$val"arguments)
+  elif [[ "$val" =~ ^\{(.*)\}$ ]]; then
+    # JSON Object (must be in JSON format)
+    JSON=$(echo "$JSON" | jq --argjson val "$val" ".$key = \$val")
+  elif [[ "$val" == "true" || "$val" == "false" ]]; then
+    # Boolean
+    JSON=$(echo "$JSON" | jq ".$key = $val")
+  elif [[ "$val" == "null" ]]; then
+    # Null
+    JSON=$(echo "$JSON" | jq ".$key = null")
+  else
+    # String (default)
+    JSON=$(echo "$JSON" | jq ".$key = \"$val\"")
+  fi
+}
+
+reset_cache() {
+  CURRENT_OPT=
+  VALUES=
+}
+
+
+add_key() {
+    key= # the key to write to json file
+
+    reset_cache
+    
+    # if key is literally --, set "--" to true
+    if [[ "$1" == '--' ]]; then
+      CURRENT_OPT='DOUBLEDASH'
+    else
+      CURRENT_OPT="${1:2}"
+    fi
+
+    edit_json "parsed.$CURRENT_OPT" true
+}
+
+add_value () {
+  key="$1"
+  new_value="$2"
+
+  # if key is empty, replace with 'unknown'
+  [[ -z "$key" ]] && key='unknown'
+
+  # get json value, modify, and write
+  old_value=$(get_json_value "$key")
+  old_value_type=$(get_json_type "$key")
+
+  # change datatype to (empty) string if boolean or null
+  case "$old_value_type" in
+    string) ;; # normal
+    boolean | null) old_value= ;;
+    *) >&2 echo "old_value_type is $old_value_type" ;;
+  esac
+
+  new_value=$(trim "$old_value $new_value")
+  
+  # echo "old value is $old_value, type is $old_value_type, new value is $new_value" #debug
+
+  edit_json "parsed.$key" "$new_value"
+}
+
+# trim() {
+#   echo "$*" | xargs --null
+# }
+
+trim() {
+  echo "$*" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+main $ARGS
+
+# TEST CASES
+
+# `none`
+# string values
+# --
+# --key
+# --key string value
+# --key number
+
+
 # Failed Tests and Issues:
 #
 # 1. **Test Input**: `parse --list "[1, 2, 3]" --nested '{"key": "value"}'`
@@ -103,161 +267,3 @@
 #   3. Values inside quotes, especially when they contain spaces, which need to be handled as single arguments.
 #
 # These issues need to be addressed by ensuring proper escaping, handling of quoted strings, and proper parsing of JSON objects and arrays.
-
-JSON='{}'
-CURRENT_OPT=
-BYPASS=0
-
-# try not to mess with this structure, make other functions subfunctions of these below
-main() {
-    initialize "$@"
-    parse "$@"
-    terminate
-}
-
-initialize() {
-    # count arguments and add to JSON
-    edit_json args.count $#
-    edit_json args.input "$*"
-    edit_json args.parsed '{}'
-}
-
-parse() {
-    # if start with --, add as key, else add as value, but if literal '--', then set -- = true
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            # --) add_special_key '--' ;;
-            --help) print_help ;;
-            --*) add_key "$1" ;;
-            -*) add_key "-$1" ;;
-            *) add_value "$CURRENT_OPT" "$1" ;;
-        esac
-        shift
-    done
-}
-
-terminate() {
-    if [[ $BYPASS -ne 1 ]]; then
-      # output to stdout
-      jq . <<< "$JSON"
-    fi
-}
-
-get_json_type() {
-  query=".args.parsed.$1 | type"
-  result=$(echo "$JSON" | jq -r "$query")
-  echo "$result"
-}
-
-get_json_value() {
-  query=".args.parsed.$1"
-  result=$(echo "$JSON" | jq -r "$query")
-  echo "$result"
-  
-  # # Return nothing if value is null, or "BOOL1" if it's true
-  # if [[ "$result" == "null" ]]; then
-  #   return  # This will return nothing
-  # elif [[ "$result" == "true" ]]; then
-  #   echo "BOOL1"  # Return BOOL1 if true
-  # elif [[ "$result" == "false" ]]; then
-  #   echo "BOOL0" # Return BOOL0 if false
-  # else
-  #   echo "$result"  # Otherwise, just return the value
-  # fi
-}
-
-edit_json() {
-  local key="$1"
-  local val=$(trim "$2")
-
-  # Determine the type of the value
-  if [[ "$val" =~ ^[0-9]+$ ]]; then
-    # Number
-    JSON=$(echo "$JSON" | jq ".$key = $val")
-  elif [[ "$val" =~ ^\[(.*)\]$ ]]; then
-    # Array (must be in JSON format)
-    JSON=$(echo "$JSON" | jq --argjson val "$val" ".$key = \$val"arguments)
-  elif [[ "$val" =~ ^\{(.*)\}$ ]]; then
-    # JSON Object (must be in JSON format)
-    JSON=$(echo "$JSON" | jq --argjson val "$val" ".$key = \$val")
-  elif [[ "$val" == "true" || "$val" == "false" ]]; then
-    # Boolean
-    JSON=$(echo "$JSON" | jq ".$key = $val")
-  elif [[ "$val" == "null" ]]; then
-    # Null
-    JSON=$(echo "$JSON" | jq ".$key = null")
-  else
-    # String (default)
-    JSON=$(echo "$JSON" | jq ".$key = \"$val\"")
-  fi
-}
-
-reset_cache() {
-  CURRENT_OPT=
-  VALUES=
-}
-
-
-add_key() {
-    key= # the key to write to json file
-
-    reset_cache
-    
-    # if key is literally --, set "--" to true
-    if [[ "$1" == '--' ]]; then
-      CURRENT_OPT='DOUBLEDASH'
-    else
-      CURRENT_OPT="${1:2}"
-    fi
-
-    edit_json "args.parsed.$CURRENT_OPT" true
-}
-
-add_value () {
-  key="$1"
-  new_value="$2"
-
-  # if key is empty, replace with 'unknown'
-  [[ -z "$key" ]] && key='unknown'
-
-  # get json value, modify, and write
-  old_value=$(get_json_value "$key")
-  old_value_type=$(get_json_type "$key")
-
-  # change datatype to (empty) string if boolean or null
-  case "$old_value_type" in
-    string) ;; # normal
-    boolean | null) old_value= ;;
-    *) >&2 echo "old_value_type is $old_value_type" ;;
-  esac
-
-  new_value=$(trim "$old_value $new_value")
-  
-  # echo "old value is $old_value, type is $old_value_type, new value is $new_value" #debug
-
-  edit_json "args.parsed.$key" "$new_value"
-}
-
-# trim() {
-#   echo "$*" | xargs --null
-# }
-
-trim() {
-  echo "$*" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
-}
-
-print_help() {
-  BYPASS=1
-  echo "You have successfully bypassed this command. Sadly, nothing here."
-}
-
-main "$@"
-
-# TEST CASES
-
-# `none`
-# string values
-# --
-# --key
-# --key string value
-# --key number
